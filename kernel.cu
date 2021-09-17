@@ -1,4 +1,7 @@
-﻿
+﻿#include <random>
+#include <iostream>
+#include <thread>
+
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
@@ -15,12 +18,7 @@ __global__ void addKernel(int* c, const int* a, const int* b)
     c[i] = a[i] + b[i];
 }
 
-int main()
-{
-    sf::RenderWindow window(sf::VideoMode(800, 600), "My window");
-    sf::CircleShape shape(100.f);
-    shape.setFillColor(sf::Color::Green);
-
+int _main() {
     const int arraySize = 5;
     const int a[arraySize] = { 1, 2, 3, 4, 5 };
     const int b[arraySize] = { 10, 20, 30, 40, 50 };
@@ -35,22 +33,6 @@ int main()
 
     printf("{1,2,3,4,5} + {10,20,30,40,50} = {%d,%d,%d,%d,%d}\n",
         c[0], c[1], c[2], c[3], c[4]);
-
-    while (window.isOpen())
-    {
-        // check all the window's events that were triggered since the last iteration of the loop
-        sf::Event event;
-        while (window.pollEvent(event))
-        {
-            // "close requested" event: we close the window
-            if (event.type == sf::Event::Closed)
-                window.close();
-        }
-
-        window.clear();
-        window.draw(shape);
-        window.display();
-    }
 
     // cudaDeviceReset must be called before exiting in order for profiling and
     // tracing tools such as Nsight and Visual Profiler to show complete traces.
@@ -141,4 +123,115 @@ Error:
     cudaFree(dev_b);
 
     return cudaStatus;
+}
+
+inline int warpCoord(int value, int limit) {
+    if (value < 0)
+        return value + limit;
+    else if (value >= limit)
+        return value - limit;
+    else
+        return value;
+}
+
+constexpr sf::Uint32 getMatrixSum(const sf::Uint8* pMatrix, unsigned int width, unsigned int height) {
+    const sf::Uint8* pMatrixPos = pMatrix;
+    const sf::Uint8* pMatrixEnd = pMatrix + width * height;
+
+    sf::Uint32 sum = 0;
+    while (pMatrixPos < pMatrixEnd)
+        sum += *(pMatrixPos++);
+
+    return sum;
+}
+
+const sf::Uint8 sumMatrix[] = {
+    0, 1, 1, 1, 0,
+    1, 1, 2, 1, 1,
+    1, 2, 3, 2, 1,
+    1, 1, 2, 1, 1,
+    0, 1, 1, 1, 0,
+};
+const sf::Uint32 sumMatrixSum = getMatrixSum(sumMatrix, 5, 5);
+
+void updateTexture(sf::Uint8* pBoardOut, sf::Uint8* pBoardIn, sf::Uint32* pPixels, sf::Texture& texture) {
+    sf::Vector2u size = texture.getSize();
+    for (unsigned int y = 0; y < size.y; ++y)
+        for (unsigned int x = 0; x < size.x; ++x) {
+            sf::Uint32 sum = 0;
+            for (int sy = -2; sy <= 2; ++sy) {
+                int ry = warpCoord(y + sy, size.y);
+                for (int sx = -2; sx <= 2; ++sx) {
+                    int rx = warpCoord(x + sx, size.x);
+                    sum += pBoardIn[ry * size.x + rx] * sumMatrix[(sy + 2) * 5 + (sx + 2)];
+                }
+            }
+            pBoardOut[y * size.x + x] = sum / sumMatrixSum;
+        }
+
+    sf::Uint8* pBoardOutStart = pBoardOut;
+    sf::Uint32* pPixelsPos = pPixels;
+    sf::Uint32* pPixelsEnd = pPixels+ size.x * size.y;
+    while (pPixelsPos < pPixelsEnd) {
+        sf::Uint8 cell = *(pBoardOutStart++);
+        *(pPixelsPos++) = 0xff000000 | (sf::Uint32(cell)) | (sf::Uint32(cell) << 8) | (sf::Uint32(cell) << 16);
+    }
+    texture.update(reinterpret_cast<sf::Uint8*>(pPixels));
+}
+
+int main()
+{
+    sf::VideoMode vmDesktop = sf::VideoMode::getDesktopMode();
+    sf::VideoMode vmWindow(vmDesktop.width >> 1, vmDesktop.height >> 1);
+    sf::RenderWindow window(vmWindow, "SFML works!");
+
+    long boardSize = vmDesktop.width * vmDesktop.height;
+    sf::Uint8* pBoards[2];
+    pBoards[0] = new sf::Uint8[boardSize];
+    pBoards[1] = new sf::Uint8[boardSize];
+    sf::Uint32* pPixels = new sf::Uint32[boardSize];
+
+    std::random_device rd;
+    std::default_random_engine re(rd());
+    std::uniform_int_distribution<int> uniform_dist(0, std::numeric_limits<sf::Uint8>::max());
+    sf::Uint8* pBoard = pBoards[0];
+    sf::Uint8* pBoardEnd = pBoard + boardSize;
+    while (pBoard < pBoardEnd)
+        *(pBoard++) = uniform_dist(re);
+
+    sf::Texture texture;
+    if (!texture.create(vmWindow.width, vmWindow.height))
+        return -1;
+    sf::Sprite sprite(texture);
+
+    sf::Clock clock;
+    sf::Time lastTime = clock.getElapsedTime();
+    long frameCount = 0;
+
+    while (window.isOpen())
+    {
+        sf::Event event;
+        while (window.pollEvent(event))
+        {
+            if (event.type == sf::Event::Closed)
+                window.close();
+        }
+
+        std::swap(pBoards[0], pBoards[1]);
+        updateTexture(pBoards[0], pBoards[1], pPixels, texture);
+
+        window.clear();
+        window.draw(sprite);
+        window.display();
+
+        ++frameCount;
+        sf::Time currentTime = clock.getElapsedTime();
+        float timeDiffSecond = currentTime.asSeconds() - lastTime.asSeconds();
+        if (timeDiffSecond >= 1.0f && frameCount >= 10) {
+            float fps = float(frameCount) / timeDiffSecond;
+            std::cout << "FPS: " << floor(fps) << std::endl;
+            lastTime = currentTime;
+            frameCount = 0;
+        }
+    }
 }
