@@ -1,6 +1,7 @@
 ﻿#include <random>
 #include <iostream>
 #include <thread>
+#include <mutex>
 
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
@@ -10,6 +11,8 @@
 #include <SFML/Window.hpp>
 #include <SFML/Graphics.hpp>
 
+#include "CudaLife.cuh"
+
 cudaError_t addWithCuda(int* c, const int* a, const int* b, unsigned int size);
 
 __global__ void addKernel(int* c, const int* a, const int* b)
@@ -18,7 +21,7 @@ __global__ void addKernel(int* c, const int* a, const int* b)
     c[i] = a[i] + b[i];
 }
 
-int _main() {
+int main_1() {
     const int arraySize = 5;
     const int a[arraySize] = { 1, 2, 3, 4, 5 };
     const int b[arraySize] = { 10, 20, 30, 40, 50 };
@@ -134,7 +137,7 @@ inline int warpCoord(int value, int limit) {
         return value;
 }
 
-constexpr sf::Uint32 getMatrixSum(const sf::Uint8* pMatrix, unsigned int width, unsigned int height) {
+constexpr sf::Uint32 getMatrixWeight(const sf::Uint8* pMatrix, unsigned int width, unsigned int height) {
     const sf::Uint8* pMatrixPos = pMatrix;
     const sf::Uint8* pMatrixEnd = pMatrix + width * height;
 
@@ -152,7 +155,7 @@ const sf::Uint8 sumMatrix[] = {
     1, 1, 2, 1, 1,
     0, 1, 1, 1, 0,
 };
-const sf::Uint32 sumMatrixSum = getMatrixSum(sumMatrix, 5, 5);
+const sf::Uint32 sumMatrixWeight = getMatrixWeight(sumMatrix, 5, 5);
 
 void updateTexture(sf::Uint8* pBoardOut, sf::Uint8* pBoardIn, sf::Uint32* pPixels, sf::Texture& texture) {
     sf::Vector2u size = texture.getSize();
@@ -166,7 +169,7 @@ void updateTexture(sf::Uint8* pBoardOut, sf::Uint8* pBoardIn, sf::Uint32* pPixel
                     sum += pBoardIn[ry * size.x + rx] * sumMatrix[(sy + 2) * 5 + (sx + 2)];
                 }
             }
-            pBoardOut[y * size.x + x] = sum / sumMatrixSum;
+            pBoardOut[y * size.x + x] = sum / sumMatrixWeight;
         }
 
     sf::Uint8* pBoardOutStart = pBoardOut;
@@ -179,7 +182,7 @@ void updateTexture(sf::Uint8* pBoardOut, sf::Uint8* pBoardIn, sf::Uint32* pPixel
     texture.update(reinterpret_cast<sf::Uint8*>(pPixels));
 }
 
-int main()
+int main_2()
 {
     sf::VideoMode vmDesktop = sf::VideoMode::getDesktopMode();
     sf::VideoMode vmWindow(vmDesktop.width >> 1, vmDesktop.height >> 1);
@@ -234,4 +237,100 @@ int main()
             frameCount = 0;
         }
     }
+}
+
+int main() {
+    sf::VideoMode vmDesktop = sf::VideoMode::getDesktopMode();
+
+    int deviceCount;
+    int deviceSelected = 0;
+    cudaErrorCheck(cudaGetDeviceCount(&deviceCount));
+
+    std::cout << "CUDA devices [" << deviceCount << "]" << std::endl;
+    for (int device = 0; device < deviceCount; ++device) {
+        std::cout << "\t# " << device << std::endl;
+        cudaDeviceProp deviceProp;
+        cudaErrorCheck(cudaGetDeviceProperties(&deviceProp, device));
+        std::cout << "\t\tDevice Name:             " << deviceProp.name << std::endl;
+        std::cout << "\t\tMemory Clock Rate (KHz): " << deviceProp.memoryClockRate << std::endl;
+        std::cout << "\t\tMemory Bus Width (bits): " << deviceProp.memoryBusWidth << std::endl;
+        std::cout << "\t\tWarp size (threads):     " << deviceProp.warpSize << std::endl;
+        std::cout << "\t\tProcessor count:         " << deviceProp.multiProcessorCount << std::endl;
+        std::cout << "\t\tIs integrated:           " << deviceProp.integrated << std::endl;
+        std::cout << "\t\tCompute mode:            " << deviceProp.computeMode << std::endl;
+        std::cout << "\t\tIs multiGPU board:       " << deviceProp.isMultiGpuBoard << std::endl;
+        deviceSelected = device;
+    }
+
+    cudaErrorCheck(cudaSetDevice(deviceSelected));
+
+#ifdef _DEBUG
+    sf::VideoMode vmWindow(vmDesktop.width >> 1, vmDesktop.height >> 1);
+    sf::RenderWindow window(vmWindow, "SFML works!");
+#else
+    sf::VideoMode vmWindow(vmDesktop.width, vmDesktop.height);
+    sf::RenderWindow window(vmWindow, "SFML works!", sf::Style::None);
+#endif // _DEBUG
+
+    window.setVerticalSyncEnabled(false);
+
+    sf::ContextSettings settings = window.getSettings();
+
+    std::cout << "OpenGL setup:" << std::endl;
+    std::cout << "\tdepth bits:" << settings.depthBits << std::endl;
+    std::cout << "\tstencil bits:" << settings.stencilBits << std::endl;
+    std::cout << "\tantialiasing level:" << settings.antialiasingLevel << std::endl;
+    std::cout << "\tversion:" << settings.majorVersion << "." << settings.minorVersion << std::endl;
+
+    std::shared_ptr<CudaLife> pCS = std::make_shared<CudaLife>(vmWindow.width, vmWindow.height);
+    pCS->initialize();
+
+    sf::Uint8* pBoard = new sf::Uint8[vmWindow.width * vmWindow.height * 4];
+
+    std::random_device rd;
+    std::default_random_engine re(rd());
+    std::uniform_int_distribution<int> uniform_dist(0, 10);
+    sf::Uint32* pBoardPos = reinterpret_cast<sf::Uint32*>(pBoard);
+    sf::Uint32* pBoardEnd = pBoardPos + vmWindow.width * vmWindow.height;
+    while (pBoardPos < pBoardEnd) {
+        sf::Uint32 cell = uniform_dist(re) == 0 ? 0xff : 0x00;
+        *(pBoardPos++) = 0xff000000 | (cell) | (cell << 8) | (cell << 16);
+    }
+    pCS->outputTexture().texture().update(pBoard);
+
+    sf::Clock clock;
+    sf::Time lastTime = clock.getElapsedTime();
+    long frameCount = 0;
+
+    while (window.isOpen())
+    {
+        window.clear();
+        window.draw(pCS->outputTexture().sprite());
+        window.display();
+
+        pCS->update();
+
+        ++frameCount;
+        sf::Time currentTime = clock.getElapsedTime();
+        float timeDiffSecond = currentTime.asSeconds() - lastTime.asSeconds();
+        if (timeDiffSecond >= 1.0f) {
+            float fps = float(frameCount) / timeDiffSecond;
+            std::cout << "FPS: " << std::floor(fps) << std::endl;
+            lastTime = currentTime;
+            frameCount = 0;
+        }
+
+        sf::Event event;
+        while (window.pollEvent(event))
+        {
+            if (event.type == sf::Event::Closed) {
+                pCS->shutdown();
+                window.close();
+            }
+        }
+    }
+
+    delete[] pBoard;
+
+    pCS = nullptr;
 }

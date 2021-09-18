@@ -85,7 +85,13 @@
     <CudaCompile Include="sample.cu" />
   </ItemGroup>
   <ItemGroup>
+    <CudaCompile Include="CudaLife.cu">
+      <FileType>Document</FileType>
+    </CudaCompile>
     <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="CudaLife.cuh" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
