@@ -81,10 +81,6 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="kernel.cu" />
-    <CudaCompile Include="sample.cu" />
-  </ItemGroup>
-  <ItemGroup>
     <CudaCompile Include="CudaLife.cu">
       <FileType>Document</FileType>
     </CudaCompile>
@@ -92,6 +88,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CudaLife.cuh" />
+    <ClInclude Include="CudaLife.h" />
+    <ClInclude Include="CudaTexture.h" />
+    <ClInclude Include="utils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
